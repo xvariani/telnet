@@ -11,37 +11,44 @@ app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
-
 const decoder = new TextDecoder("iso-8859-1");
-const PORT = process.env.PORT || 8000;
 
-// Limpeza da URL para evitar o erro ENOTFOUND
-const dbUrl = process.env.DATABASE_URL ? process.env.DATABASE_URL.trim().replace(/['"]/g, '') : null;
+// --- CONFIGURAÇÃO DO BANCO ---
+// Tentamos limpar qualquer aspa ou espaço que o Koyeb possa injetar
+const rawUrl = process.env.DATABASE_URL || "";
+const cleanUrl = rawUrl.trim().replace(/^["'](.+)["']$/, '$1');
+
+console.log("-----------------------------------------");
+console.log("DIAGNÓSTICO DE BANCO:");
+console.log("URL Bruta:", rawUrl);
+console.log("URL Limpa:", cleanUrl ? "Configurada" : "VAZIA");
+console.log("-----------------------------------------");
 
 const pool = new Pool({
-    connectionString: dbUrl,
+    connectionString: cleanUrl,
     ssl: { rejectUnauthorized: false }
 });
 
-// Log de diagnóstico no boot
-console.log("Monitorando banco em:", dbUrl ? dbUrl.split('@')[1] : "URL NÃO ENCONTRADA");
-
+// Endpoint SQL
 app.post('/api/sql', async (req, res) => {
     const { query, params } = req.body;
     let client;
     try {
-        if (!dbUrl) throw new Error("DATABASE_URL não configurada no Koyeb");
+        if (!cleanUrl || cleanUrl === "base") {
+            throw new Error("A DATABASE_URL está configurada incorretamente no painel do Koyeb (Valor lido: " + cleanUrl + ")");
+        }
         client = await pool.connect();
         const result = await client.query(query, params || []);
         res.json({ success: true, rows: result.rows });
     } catch (err) {
-        console.error("Erro SQL:", err.message);
+        console.error("ERRO SQL:", err.message);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         if (client) client.release();
     }
 });
 
+// Telnet Proxy
 io.on('connection', (socket) => {
     let telnetClient = new net.Socket();
     socket.on('connect-telnet', (config) => {
@@ -62,4 +69,4 @@ io.on('connection', (socket) => {
 });
 
 app.get('/', (req, res) => res.send('MUD Backend + DB Online'));
-server.listen(PORT, '0.0.0.0', () => console.log(`Server ON na porta ${PORT}`));
+server.listen(process.env.PORT || 8000, '0.0.0.0', () => console.log(`Server ON`));
