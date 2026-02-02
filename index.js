@@ -8,7 +8,7 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 // O Koyeb define a porta automaticamente via variável de ambiente
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 8000;
 
 io.on('connection', (socket) => {
     console.log('Novo cliente conectado via Web');
