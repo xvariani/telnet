@@ -15,39 +15,33 @@ const io = new Server(server, { cors: { origin: "*" } });
 const decoder = new TextDecoder("iso-8859-1");
 const PORT = process.env.PORT || 8000;
 
-// Configuração do Banco com log de verificação
-console.log("Iniciando conexão com:", process.env.DATABASE_URL ? "URL encontrada" : "URL AUSENTE");
+// Limpeza da URL para evitar o erro ENOTFOUND
+const dbUrl = process.env.DATABASE_URL ? process.env.DATABASE_URL.trim().replace(/['"]/g, '') : null;
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: dbUrl,
     ssl: { rejectUnauthorized: false }
 });
 
-// Teste imediato de conexão com o banco
-pool.query('SELECT NOW()', (err, res) => {
-    if (err) console.error("ERRO CRÍTICO AO CONECTAR NO NEON:", err.message);
-    else console.log("Conexão com Neon estabelecida com sucesso.");
-});
-
-app.get('/', (req, res) => res.send('MUD Backend + DB Online'));
+// Log de diagnóstico no boot
+console.log("Monitorando banco em:", dbUrl ? dbUrl.split('@')[1] : "URL NÃO ENCONTRADA");
 
 app.post('/api/sql', async (req, res) => {
     const { query, params } = req.body;
     let client;
     try {
+        if (!dbUrl) throw new Error("DATABASE_URL não configurada no Koyeb");
         client = await pool.connect();
         const result = await client.query(query, params || []);
         res.json({ success: true, rows: result.rows });
     } catch (err) {
-        console.error("Erro na execução SQL:", err.message);
-        // Retornamos o erro exato para o frontend mostrar no log
+        console.error("Erro SQL:", err.message);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         if (client) client.release();
     }
 });
 
-// Proxy Telnet
 io.on('connection', (socket) => {
     let telnetClient = new net.Socket();
     socket.on('connect-telnet', (config) => {
@@ -67,4 +61,5 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { if(telnetClient) telnetClient.destroy(); });
 });
 
+app.get('/', (req, res) => res.send('MUD Backend + DB Online'));
 server.listen(PORT, '0.0.0.0', () => console.log(`Server ON na porta ${PORT}`));
