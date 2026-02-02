@@ -6,45 +6,51 @@ const express = require('express');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Aumentado para suportar muitos bots
+
+// CONFIGURAÇÃO DE CORS REFORÇADA
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
+}));
+
+app.use(express.json());
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { 
+    cors: { origin: "*", methods: ["GET", "POST"] } 
+});
 
 const decoder = new TextDecoder("iso-8859-1");
 const PORT = process.env.PORT || 8000;
 
-// Conexão com o Banco de Dados (Configurado via Variável de Ambiente no Koyeb)
+// Conexão com Banco (Blindada)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 5000
 });
 
-// Rota SQL com LOG de erro detalhado para o painel do Koyeb
+// Rota de Teste (Para o navegador ver que está online)
+app.get('/', (req, res) => res.send('MUD Backend + DB Online'));
+
+// Rota SQL
 app.post('/api/sql', async (req, res) => {
     const { query, params } = req.body;
+    let client;
     try {
-        const client = await pool.connect();
+        client = await pool.connect();
         const result = await client.query(query, params || []);
-        client.release();
         res.json({ success: true, rows: result.rows });
     } catch (err) {
-        console.error("ERRO NO BANCO DE DADOS:", err.message);
+        console.error("Erro SQL:", err.message);
         res.status(500).json({ success: false, error: err.message });
+    } finally {
+        if (client) client.release();
     }
 });
 
-// Inicialização da Tabela
-pool.query(`
-    CREATE TABLE IF NOT EXISTS user_config (
-        id SERIAL PRIMARY KEY, 
-        profile_name TEXT UNIQUE, 
-        data JSONB
-    );
-`).then(() => console.log("Tabela user_config verificada/criada.")).catch(e => console.error("Erro ao criar tabela:", e));
-
-// Socket.io (Túnel Telnet)
+// Socket.io Telnet Proxy
 io.on('connection', (socket) => {
     let telnetClient = new net.Socket();
     socket.on('connect-telnet', (config) => {
@@ -63,5 +69,10 @@ io.on('connection', (socket) => {
     });
     socket.on('disconnect', () => { if(telnetClient) telnetClient.destroy(); });
 });
+
+// Tenta criar tabela mas não mata o processo se falhar
+pool.query(`CREATE TABLE IF NOT EXISTS user_config (id SERIAL PRIMARY KEY, profile_name TEXT UNIQUE, data JSONB);`)
+    .then(() => console.log("DB Ready"))
+    .catch(e => console.error("DB Error on start:", e.message));
 
 server.listen(PORT, '0.0.0.0', () => console.log(`Server ON na porta ${PORT}`));
