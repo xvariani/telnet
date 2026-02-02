@@ -1,7 +1,13 @@
 const net = require('net');
 const http = require('http');
 const { Server } = require('socket.io');
-const app = require('express')();
+const { Pool } = require('pg'); // Cliente do Banco de Dados
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.json()); // Permite receber JSON no POST
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
@@ -9,81 +15,55 @@ const io = new Server(server, { cors: { origin: "*" } });
 const decoder = new TextDecoder("iso-8859-1");
 const PORT = process.env.PORT || 8000;
 
-// Constantes do Protocolo Telnet
-const IAC = 255; // Interpret as Command
-const DO = 253;
-const WILL = 251;
-const SB = 250;  // Subnegotiation Begin
-const SE = 240;  // Subnegotiation End
-const TTYPE = 24; // Terminal Type Option
-const IS = 0;
-const SEND = 1;
+// CONEXÃO COM O BANCO DE DADOS
+// Ele pega a senha automaticamente da variável DATABASE_URL que configuramos no Koyeb
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false } // Necessário para Neon/AWS
+});
 
+// --- ROTA DE SQL GENÉRICA (O que você pediu) ---
+// CUIDADO: Em produção real, validar isso é vital para evitar SQL Injection.
+// Para seu uso pessoal, isso permite rodar qualquer coisa.
+app.post('/api/sql', async (req, res) => {
+    const { query, params } = req.body;
+    
+    if (!query) return res.status(400).json({ error: "Faltou a query SQL" });
+
+    try {
+        const client = await pool.connect();
+        const result = await client.query(query, params || []);
+        client.release();
+        
+        res.json({ 
+            success: true, 
+            rows: result.rows, 
+            rowCount: result.rowCount 
+        });
+    } catch (err) {
+        console.error("Erro SQL:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// --- SOCKET IO (MUD PROXY) ---
 io.on('connection', (socket) => {
     let telnetClient = new net.Socket();
 
     socket.on('connect-telnet', (config) => {
         const port = config.port || 23;
         const host = config.host;
+        console.log(`Conectando em ${host}:${port}...`);
 
-        console.log(`Conectando Telnet ANSI em ${host}:${port}...`);
         telnetClient.connect(port, host, () => {
-            socket.emit('status', 'Conexão estabelecida.');
+            socket.emit('status', 'Conectado via Proxy.');
         });
 
         telnetClient.on('data', (buffer) => {
-            let cleanData = [];
-            
-            // Processador manual de bytes para lidar com a negociação
-            for (let i = 0; i < buffer.length; i++) {
-                let byte = buffer[i];
-
-                if (byte === IAC) {
-                    const command = buffer[i + 1];
-                    const option = buffer[i + 2];
-
-                    // Se o servidor perguntar "DO TTYPE" (Você suporta tipo de terminal?)
-                    if (command === DO && option === TTYPE) {
-                        // Responde: "WILL TTYPE" (Sim, eu suporto!)
-                        const response = Buffer.from([IAC, WILL, TTYPE]);
-                        telnetClient.write(response);
-                        i += 2; // Pula os bytes processados
-                    } 
-                    // Se for uma sub-negociação pedindo o tipo (SB TTYPE SEND)
-                    else if (command === SB && option === TTYPE && buffer[i + 3] === SEND) {
-                        // Responde: "Sou um terminal ANSI"
-                        // IAC SB TTYPE IS "ANSI" IAC SE
-                        const term = "ANSI"; 
-                        const head = Buffer.from([IAC, SB, TTYPE, IS]);
-                        const body = Buffer.from(term);
-                        const tail = Buffer.from([IAC, SE]);
-                        
-                        telnetClient.write(Buffer.concat([head, body, tail]));
-                        
-                        // Avança até o fim da subnegociação (busca o SE)
-                        while(i < buffer.length && buffer[i] !== SE) { i++; }
-                    }
-                    // Ignora outros comandos IAC para não sujar a tela
-                    else {
-                        // Avança simples (IAC + CMD + OPT)
-                        if (command >= 251 && command <= 254) i += 2;
-                        else if (command === SB) {
-                            // Avança até o fim da subnegociação
-                            while(i < buffer.length && buffer[i] !== SE) { i++; }
-                        }
-                        else i += 1; // Comandos simples de 2 bytes
-                    }
-                } else {
-                    // Se não for comando, é texto do jogo!
-                    cleanData.push(byte);
-                }
-            }
-
-            // Envia apenas o texto limpo para o navegador
-            if (cleanData.length > 0) {
-                const textBuffer = Buffer.from(cleanData);
-                const text = decoder.decode(textBuffer);
-                socket.emit('output', text);
+            // Remove IAC (Negociação Telnet) para limpar sujeira
+            const cleanBuffer = Buffer.from(buffer.filter(b => b !== 255));
+            if (cleanBuffer.length > 0) {
+                socket.emit('output', decoder.decode(cleanBuffer));
             }
         });
 
@@ -101,5 +81,14 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => { if(telnetClient) telnetClient.destroy(); });
 });
 
-app.get('/', (req, res) => res.send('MUD Proxy v6 (ANSI Negotiation)'));
+// Inicialização: Cria a tabela se não existir (apenas para facilitar sua vida)
+pool.query(`
+    CREATE TABLE IF NOT EXISTS user_config (
+        id SERIAL PRIMARY KEY, 
+        profile_name TEXT UNIQUE, 
+        data JSONB
+    );
+`).catch(err => console.log("Erro ao criar tabela inicial:", err));
+
+app.get('/', (req, res) => res.send('MUD Backend + DB Online'));
 server.listen(PORT, '0.0.0.0', () => console.log(`Rodando na porta ${PORT}`));
