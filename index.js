@@ -6,7 +6,7 @@ const app = require('express')();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-// Decoder para corrigir acentos do MUD (Latin-1/ISO-8859-1)
+// Decoder para ISO-8859-1 (MUDs clássicos)
 const decoder = new TextDecoder("iso-8859-1");
 
 const PORT = process.env.PORT || 8000;
@@ -20,7 +20,6 @@ io.on('connection', (socket) => {
         });
 
         telnetClient.on('data', (data) => {
-            // Decodifica e envia para a web
             socket.emit('output', decoder.decode(data));
         });
 
@@ -34,11 +33,10 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Ping para manter o serviço acordado
-    socket.on('heartbeat', () => socket.emit('heartbeat-ack', Date.now()));
+    socket.on('heartbeat', () => socket.emit('heartbeat-ack'));
 
     socket.on('disconnect', () => telnetClient.destroy());
 });
 
-app.get('/', (req, res) => res.send('Proxy MUD Ativo'));
-server.listen(PORT, '0.0.0.0', () => console.log(`Rodando na porta ${PORT}`));
+app.get('/', (req, res) => res.send('MUD Engine v2 Active'));
+server.listen(PORT, '0.0.0.0', () => console.log(`Proxy rodando na porta ${PORT}`));
