@@ -1,49 +1,44 @@
 const net = require('net');
-const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 
-const app = express();
+const app = require('express')();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-// O Koyeb define a porta automaticamente via variável de ambiente
+// Tradutor de caracteres nativo do Node.js
+const decoder = new TextDecoder("iso-8859-1"); 
+
 const PORT = process.env.PORT || 8000;
 
 io.on('connection', (socket) => {
-    console.log('Novo cliente conectado via Web');
     let telnetClient = new net.Socket();
 
-    // Evento para conectar ao equipamento Telnet
     socket.on('connect-telnet', (config) => {
-        // config = { host: 'xxx.xxx.xxx.xxx', port: 23 }
         telnetClient.connect(config.port || 23, config.host, () => {
-            socket.emit('status', 'Conectado com sucesso ao equipamento!');
+            socket.emit('status', 'Conectado!');
         });
 
         telnetClient.on('data', (data) => {
-            socket.emit('output', data.toString());
+            // A MÁGICA ACONTECE AQUI: 
+            // Converte os bytes brutos do MUD para o texto correto com acentos
+            const cleanText = decoder.decode(data);
+            socket.emit('output', cleanText);
         });
 
-        telnetClient.on('error', (err) => {
-            socket.emit('status', 'Erro: ' + err.message);
-        });
-
-        telnetClient.on('close', () => {
-            socket.emit('status', 'Conexão Telnet encerrada.');
-        });
+        telnetClient.on('error', (err) => socket.emit('status', 'Erro: ' + err.message));
+        telnetClient.on('close', () => socket.emit('status', 'Desconectado'));
     });
 
-    // Enviar comando do navegador para o Telnet
     socket.on('input', (data) => {
-        if (telnetClient) telnetClient.write(data + '\n');
+        if (telnetClient && telnetClient.writable) {
+            // Envia o comando para o MUD
+            telnetClient.write(data + '\n');
+        }
     });
 
-    socket.on('disconnect', () => {
-        telnetClient.destroy();
-    });
+    socket.on('disconnect', () => telnetClient.destroy());
 });
 
-app.get('/', (req, res) => res.send('Servidor Proxy Telnet Ativo!'));
-
-server.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
+app.get('/', (req, res) => res.send('Proxy MUD Ativo e Corrigido'));
+server.listen(PORT, '0.0.0.0', () => console.log(`Rodando na porta ${PORT}`));
